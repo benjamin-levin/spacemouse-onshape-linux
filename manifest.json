@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Onshape SpaceMouse Linux Bridge",
+  "version": "0.2.0",
+  "description": "Enable Onshape's native 3Dconnexion browser path on Linux and connect it to a local protocol bridge.",
+  "permissions": [],
+  "host_permissions": [
+    "https://cad.onshape.com/*",
+    "https://*.onshape.com/*",
+    "https://127.51.68.120/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://cad.onshape.com/*",
+        "https://*.onshape.com/*"
+      ],
+      "js": [
+        "inject_patch.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "platform_patch.js"
+      ],
+      "matches": [
+        "https://cad.onshape.com/*",
+        "https://*.onshape.com/*"
+      ]
+    }
+  ],
+  "action": {
+    "default_title": "Onshape SpaceMouse Linux Bridge"
+  }
+}

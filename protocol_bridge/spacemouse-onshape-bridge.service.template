@@ -1,0 +1,14 @@
+[Unit]
+Description=Onshape SpaceMouse protocol bridge
+After=graphical-session.target network-online.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/run_bridge.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

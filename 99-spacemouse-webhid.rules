@@ -1,0 +1,3 @@
+# Allow the logged-in desktop user and the input group to access the
+# SpaceMouse Compact hidraw node so Chrome WebHID can open it.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="256f", ATTRS{idProduct}=="c635", MODE:="0660", GROUP:="input", TAG+="uaccess"

@@ -1,0 +1,14 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+protocol_bridge/.venv/
+
+# Extracted package metadata / generated runtime files
+protocol_bridge/spacenav_ws-0.1.5.dist-info/
+
+# Local env / OS
+.DS_Store
+Thumbs.db
