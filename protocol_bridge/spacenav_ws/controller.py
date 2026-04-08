@@ -20,8 +20,9 @@ SMOOTHING_ALPHA = 0.82
 TRANSLATION_SPEED = 2.0
 ROTATION_SPEED_DEG = 240.0
 ZOOM_SPEED = 1.6
-STATE_REFRESH_INTERVAL = 0.6
+STATE_REFRESH_INTERVAL = 0.2
 CONTROL_HZ = 144.0
+MOTION_STALE_TIMEOUT = 0.04
 
 
 class Mouse3d:
@@ -85,8 +86,10 @@ class Controller:
         self.cached_perspective: bool | None = None
         self.last_state_refresh = 0.0
         self.latest_motion: MotionEvent | None = None
+        self.latest_motion_at = 0.0
         self.motion_lock = asyncio.Lock()
         self.button_queue: asyncio.Queue[ButtonEvent] = asyncio.Queue()
+        self.needs_resync = True
 
     async def subscribe(self, msg: Subscribe):
         """When a subscription request for self.controller_uri comes in we start broadcasting!"""
@@ -130,7 +133,19 @@ class Controller:
                 await self.button_queue.put(event)
             else:
                 async with self.motion_lock:
-                    self.latest_motion = event
+                    if self.in_deadzone(event):
+                        self.latest_motion = None
+                        self.latest_motion_at = time.monotonic()
+                        self.filtered_trans.fill(0.0)
+                        self.filtered_rot.fill(0.0)
+                        self.cached_affine = None
+                        self.cached_view_extents = None
+                        self.cached_perspective = None
+                        self.last_state_refresh = 0.0
+                        self.needs_resync = True
+                    else:
+                        self.latest_motion = event
+                        self.latest_motion_at = time.monotonic()
 
     async def start_control_loop(self):
         """Drive Onshape at a fixed cadence using only the latest state."""
@@ -152,6 +167,18 @@ class Controller:
 
             async with self.motion_lock:
                 event = self.latest_motion
+                event_age = now - self.latest_motion_at if event is not None else 0.0
+
+                if event is not None and event_age > MOTION_STALE_TIMEOUT:
+                    self.latest_motion = None
+                    event = None
+                    self.filtered_trans.fill(0.0)
+                    self.filtered_rot.fill(0.0)
+                    self.cached_affine = None
+                    self.cached_view_extents = None
+                    self.cached_perspective = None
+                    self.last_state_refresh = 0.0
+                    self.needs_resync = True
 
             if event is None:
                 continue
@@ -221,6 +248,12 @@ class Controller:
         dt = float(np.clip(event.period / 1000.0, 0.001, 0.05))
         return self.filtered_trans.copy(), self.filtered_rot.copy(), dt
 
+    @staticmethod
+    def in_deadzone(event: MotionEvent) -> bool:
+        raw_trans = np.abs(np.array([event.x, event.y, event.z], dtype=np.float32))
+        raw_rot = np.abs(np.array([event.pitch, event.yaw, event.roll], dtype=np.float32))
+        return bool(np.all(raw_trans <= MOTION_DEADZONE) and np.all(raw_rot <= ROTATION_DEADZONE))
+
     async def refresh_state(self, force: bool = False):
         now = time.monotonic()
         if not force and self.cached_affine is not None and (now - self.last_state_refresh) < STATE_REFRESH_INTERVAL:
@@ -243,7 +276,23 @@ class Controller:
         view.target, view.constructionPlane, view.extents, view.affine, view.perspective, model.extents, selection.empty, selection.extents, hit.lookat, views.front
 
         """
-        await self.refresh_state(force=isinstance(event, ButtonEvent))
+        if isinstance(event, ButtonEvent):
+            await self.refresh_state(force=True)
+            model_extents = self.cached_model_extents
+            if model_extents is None:
+                return
+            await self.remote_write("view.affine", await self.remote_read("views.front"))
+            await self.remote_write("view.extents", [c * 1.2 for c in model_extents])
+            self.cached_affine = None
+            self.cached_view_extents = None
+            self.cached_perspective = None
+            self.last_state_refresh = 0.0
+            return
+
+        trans_in, rot_in, dt = self.process_motion(event)
+
+        await self.refresh_state(force=self.needs_resync)
+        self.needs_resync = False
         model_extents = self.cached_model_extents
         view_extents = self.cached_view_extents
         curr_affine = self.cached_affine
@@ -252,21 +301,12 @@ class Controller:
         if model_extents is None or view_extents is None or curr_affine is None or perspective is None:
             return
 
-        if isinstance(event, ButtonEvent):
-            await self.remote_write("view.affine", await self.remote_read("views.front"))
-            await self.remote_write("view.extents", [c * 1.2 for c in model_extents])
-            self.cached_affine = None
-            self.cached_view_extents = None
-            return
-
         # This (transpose of top left quadrant) is the correct way to get the rotation matrix of the camera but it is unstable.. Either of the below methods works fine though.
         R_cam = curr_affine[:3, :3].T
         # cam2world = np.linalg.inv(curr_affine)
         # R_cam = cam2world[:3, :3]
         U, _, Vt = np.linalg.svd(R_cam)
         R_cam = U @ Vt
-
-        trans_in, rot_in, dt = self.process_motion(event)
 
         # Scale movement relative to the current view volume so control remains
         # usable across both close-up and far-away navigation.
